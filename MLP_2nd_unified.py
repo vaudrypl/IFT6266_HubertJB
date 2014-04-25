@@ -111,7 +111,7 @@ class HiddenLayer(object):
             W = theano.shared(value=W_values, name='W', borrow=True)
 
         if b is None:
-            b_values = numpy.zeros((n_out,), dtype=theano.config.floatX) #+ 10 # for ReLU
+            b_values = numpy.zeros((n_out,), dtype=theano.config.floatX) # + 0.1 # for ReLU
             b = theano.shared(value=b_values, name='b', borrow=True)
 
         self.W = W
@@ -120,7 +120,7 @@ class HiddenLayer(object):
         lin_output = T.dot(layerInput, self.W) + self.b
         self.output = (lin_output if activation is None
                        else activation(lin_output))
-        # self.output = T.max(0,lin_output) # ReLU
+        # self.output = lin_output * (lin_output > 0) #T.max([0,lin_output]) # ReLU
                        
         # parameters of the model
         self.params = [self.W, self.b]
@@ -228,11 +228,11 @@ class MLP(object):
 
         # L1 norm ; one regularization option is to enforce L1 norm to
         # be small
-        self.L1 = abs(self.hiddenLayerNSNN.W).sum() + abs(self.outputLayerNSNN.W).sum()
+        self.L1 = abs(self.hiddenLayer1NSNN.W).sum() + abs(self.hiddenLayer2NSNN.W).sum() + abs(self.outputLayerNSNN.W).sum()
 
         # square of L2 norm ; one regularization option is to enforce
         # square of L2 norm to be small
-        self.L2_sqr = (self.hiddenLayerNSNN.W ** 2).sum() + (self.outputLayerNSNN.W ** 2).sum()
+        self.L2_sqr = (self.hiddenLayer1NSNN.W ** 2).sum() + (self.hiddenLayer2NSNN.W ** 2).sum() + (self.outputLayerNSNN.W ** 2).sum()
 
         # computing the mean square errors
         self.errors = self.outputLayerNSNN.errors
@@ -240,7 +240,7 @@ class MLP(object):
         # the parameters of the model are the parameters of the two layer it is
         # made out of
         # self.params = self.hiddenLayerNSNN.params + self.outputLayerNSNN.params + self.hiddenLayerWNN.params + self.outputLayerWNN.params
-        self.params = [self.hiddenLayerNSNN.W] + [self.outputLayerNSNN.W] + self.hiddenLayerWNN.params + self.outputLayerWNN.params
+        self.params = [self.hiddenLayer1NSNN.W] + [self.hiddenLayer2NSNN.W] + [self.outputLayerNSNN.W] + self.hiddenLayerWNN.params + self.outputLayerWNN.params
 
     def saveParams(self, dataPath, MLPtype):
         """ Pickle the W1, b1, W2 and b2 parameters of the trained network
@@ -373,7 +373,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     print "     b3: "+str(nb_out_NSNN)+" x 1"
     
     nb_in_WNN = train_set_x_WNN.get_value().shape[1]
-    nb_out_WNN = nb_hidden_units_NSNN + nb_out_NSNN
+    nb_out_WNN = sum(nb_hidden_units_NSNN) + nb_out_NSNN
     nb_hidden_units_WNN = n_hidden[0]
     print "WNN..."
     print "     W1: "+str(nb_hidden_units_WNN)+" x "+str(nb_in_WNN)    
@@ -401,8 +401,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     # here symbolically
     cost_NN = NN.errors(y_NSNN) \
          + L1_reg[1] * NN.L1 \
-         + L2_reg[1] * NN.L2_sqr             
-                
+         + L2_reg[1] * NN.L2_sqr
+    eta = T.dscalar('eta') # Learning rate
                 
     # NEURAL NETWORK #############################################
                 
@@ -452,12 +452,12 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     # (variable, update expression) pairs
     updates_NN = []
     for param, gparam in zip(NN.params, gparams_NN):
-        updates_NN.append((param, param - learning_rate[1] * gparam))
+        updates_NN.append((param, param - eta * gparam))
                         
     # compiling a Theano function `train_model` that returns the cost, but
     # in the same time updates the parameter of the model based on the rules
     # defined in `updates`
-    train_model_NN = theano.function(inputs=[index], outputs=cost_NN,
+    train_model_NN = theano.function(inputs=[index, eta], outputs=cost_NN,
             updates=updates_NN,
             givens={
                 x_NSNN: train_set_x_NSNN[index * batch_size:(index + 1) * batch_size],
@@ -529,7 +529,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     
     y_pred = numpy.zeros(n_sentence_samples)
     
-    std_factor = [0.1, 1, 2, 5,] #[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+    learning_rate = learning_rate[1]
+    std_factor = [0.1, 1.0, 2.0, 5.0,] #[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
 
     epoch = 0
     done_looping = False
@@ -541,10 +542,9 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
         print('Epoch '+str(epoch)+':')
         
         # Training set
-        for i in xrange(n_train_batches): # xrange(10000): #
-            train_losses[i] = (560**2)*train_model_NN(i)
-            #NSNN.showWeights()
-            #WNN.showWeights()
+        for i in xrange(n_train_batches): # xrange(10000): # 
+            train_losses[i] = (560**2)*train_model_NN(i,learning_rate)
+            #NN.showWeights()
             #raw_input("PRESS ENTER TO CONTINUE.")
             if i%10000 == 0:
                 print('    Training iteration '+str(i)+'/'+str(n_train_batches))
@@ -553,7 +553,6 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
                     log_file.write('\n\nTraining diverged at epoch '+str(epoch)+', before iteration '+str(i)+'. Aborting training. \n')
                     done_looping = True
                     break
-                    # log_file.close()
                     # raise Exception("Training diverged")
         this_train_loss = numpy.mean(train_losses)
         train_err.append(this_train_loss)
@@ -585,6 +584,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
         
             # Save the parameters of the model
             NN.saveParams(savePath, 'NN')
+            log_file.close()
+            log_file = open(savePath+log_name, 'a+')
             
             # Generate the sentence
             if epoch%15 == 0:
@@ -600,14 +601,22 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
                         
                     output = numpy.int16(y_gen*560)
                     wv.write(savePath+'Train_generated_data_Epoch'+str(epoch)+'_factor'+str(ind)+'.wav', 16000, output)
+                    
+                    if k == 1.0:
+                        pylab.figure()
+                        pylab.plot(y_gen)
+                        pylab.xlabel('Samples')
+                        pylab.ylabel('Amplitude')
+                        pylab.savefig(savePath+'Train_generated_data_Epoch'+str(epoch)+'_factor'+str(ind)+'.png', format='png')
             
 #        raw_input("PRESS ENTER TO CONTINUE.")
             
-        # Check if the training has improved the validation error; if not, stop training
+        # Check if the training has improved the validation error; if not, decrease the learning rate
         if epoch > 20:
             if numpy.mean(valid_err[-3:]) > numpy.mean(valid_err[-6:-3]):
-                done_looping = True
-                break
+                learning_rate *= 0.5
+                print('NEW LEARNING RATE: '+str(learning_rate))
+                log_file.write('\n NEW LEARNING RATE: '+str(learning_rate)+'\n')
 
     # Load the best model
     try:
@@ -708,13 +717,11 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     
 
 if __name__ == '__main__':
-    theano.config.exception_verbosity = 'high'
+    #theano.config.exception_verbosity = 'high'
     #theano.config.compute_test_value = 'warn'
     #theano.config.mode= 'DebugMode'
     
     path = '/home/hubert/Documents/IFT6266/TIMIT/TRAIN/DR1/FCJF0/Extracted_Features/'
-#    fileNameWNN = 'win240_ARCH2_WNN_MCPM0.npz'
-#    fileNameNSNN = 'win240_ARCH2_NSNN_MCPM0.npz'
     fileNameData = 'win240_ARCH2_FCJF0.npz'
     
     # Folder to save the results of the training
@@ -722,7 +729,7 @@ if __name__ == '__main__':
     
     n_hidden_NSNN =[200,150] # for hid_NSNN in n_hidden_NSNN:
     n_hidden_WNN = [250]
-    learning_rates = [0.0025]
+    learning_rates = [0.001,0.0003]
     L2_reg = [0.0]
     
     counter = 1
@@ -736,9 +743,9 @@ if __name__ == '__main__':
                 counter += 1
 
                 test_mlp(learning_rate=[lamb,lamb], 
-                         L2_reg=[L2,L2],#[0.0001,0.0001], 
+                         L2_reg=[L2,L2],
                          batch_size=1, # SHOULD STAY AT 1 ! 
-                         n_epochs=50, 
+                         n_epochs=500, 
                          n_hidden=[hid_WNN,n_hidden_NSNN], 
                          dataPath=path,
                          savePath=savePath,
