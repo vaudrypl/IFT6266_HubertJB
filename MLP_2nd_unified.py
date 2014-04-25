@@ -111,7 +111,7 @@ class HiddenLayer(object):
             W = theano.shared(value=W_values, name='W', borrow=True)
 
         if b is None:
-            b_values = numpy.zeros((n_out,), dtype=theano.config.floatX)
+            b_values = numpy.zeros((n_out,), dtype=theano.config.floatX) #+ 10 # for ReLU
             b = theano.shared(value=b_values, name='b', borrow=True)
 
         self.W = W
@@ -120,6 +120,8 @@ class HiddenLayer(object):
         lin_output = T.dot(layerInput, self.W) + self.b
         self.output = (lin_output if activation is None
                        else activation(lin_output))
+        # self.output = T.max(0,lin_output) # ReLU
+                       
         # parameters of the model
         self.params = [self.W, self.b]
 
@@ -187,14 +189,17 @@ class MLP(object):
         :param n_in: number of layerInput units, the dimension of the space in
         which the datapoints lie
         
-        :type n_hidden: int
-        :param n_hidden: number of hidden units
+        :type n_hidden: list of int
+        :param n_hidden: the number of entries in the list corresponds to the desired number of hidden layers;
+                         each entry in the list is the number of hidden units for each of the hidden layers
         
         :type n_out: int
         :param n_out: number of output units, the dimension of the space in
         which the labels lie
         
         """
+        
+        nb_biases_NSNN = sum(n_hidden_NSNN) + n_out_NSNN
                                   
         self.hiddenLayerWNN = HiddenLayer(rng=rng, layerInput=layerInput_WNN,
                                        n_in=n_in_WNN, n_out=n_hidden_WNN,
@@ -202,19 +207,23 @@ class MLP(object):
 
         self.outputLayerWNN = OutputLinear(layerInput=self.hiddenLayerWNN.output,
                                         n_in=n_hidden_WNN,
-                                        n_out=n_hidden_NSNN+n_out_NSNN) #n_out_WNN = total number of biases in NSNN
+                                        n_out=nb_biases_NSNN)
                                         
-        self.hiddenLayerNSNN = HiddenLayer(rng=rng, layerInput=layerInput_NSNN,
-                                       n_in=n_in_NSNN, n_out=n_hidden_NSNN,
-                                       b=self.outputLayerWNN.y_pred[0,0:n_hidden_NSNN],
+        # First hidden layer of NSNN                            
+        self.hiddenLayer1NSNN = HiddenLayer(rng=rng, layerInput=layerInput_NSNN,
+                                       n_in=n_in_NSNN, n_out=n_hidden_NSNN[0],
+                                       b=self.outputLayerWNN.y_pred[0,0:n_hidden_NSNN[0]],
                                        activation=T.tanh)
-                                       
-                                       # T.reshape(WNN.outputLayer.y_pred[0,b1_start:b1_end],NSNN.params[1].get_value().shape)
-                                       # T.unbroadcast(T.reshape(WNN.outputLayer.y_pred[0,b2_start:b2_end],(nb_out_NSNN,)),0)
-
-        self.outputLayerNSNN = OutputLinear(layerInput=self.hiddenLayerNSNN.output,
-                                        n_in=n_hidden_NSNN,
-                                        b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN:],
+        
+        # Second hidden layer of NSNN                               
+        self.hiddenLayer2NSNN = HiddenLayer(rng=rng, layerInput=self.hiddenLayer1NSNN.output,
+                                       n_in=n_hidden_NSNN[0], n_out=n_hidden_NSNN[1],
+                                       b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN[0]:n_hidden_NSNN[0]+n_hidden_NSNN[1]],
+                                       activation=T.tanh)
+        # Output layer of NSNN   
+        self.outputLayerNSNN = OutputLinear(layerInput=self.hiddenLayer2NSNN.output,
+                                        n_in=n_hidden_NSNN[1],
+                                        b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN[0]+n_hidden_NSNN[1]:],
                                         n_out=n_out_NSNN)
 
         # L1 norm ; one regularization option is to enforce L1 norm to
@@ -356,10 +365,12 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     nb_out_NSNN = 1
     nb_in_NSNN = train_set_x_NSNN.get_value().shape[1]
     print "NSNN..."
-    print "     W1: "+str(nb_hidden_units_NSNN)+" x "+str(nb_in_NSNN)    
-    print "     b1: "+str(nb_hidden_units_NSNN)+" x 1"
-    print "     W2: "+str(nb_out_NSNN)+" x "+str(nb_hidden_units_NSNN)    
-    print "     b2: "+str(nb_out_NSNN)+" x 1"
+    print "     W1: "+str(nb_hidden_units_NSNN[0])+" x "+str(nb_in_NSNN)    
+    print "     b1: "+str(nb_hidden_units_NSNN[0])+" x 1"
+    print "     W2: "+str(nb_hidden_units_NSNN[1])+" x "+str(nb_hidden_units_NSNN[0])    
+    print "     b2: "+str(nb_hidden_units_NSNN[1])+" x 1"
+    print "     W3: "+str(nb_out_NSNN)+" x "+str(nb_hidden_units_NSNN[1])    
+    print "     b3: "+str(nb_out_NSNN)+" x 1"
     
     nb_in_WNN = train_set_x_WNN.get_value().shape[1]
     nb_out_WNN = nb_hidden_units_NSNN + nb_out_NSNN
@@ -407,14 +418,14 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
             givens={              
                 x_NSNN: test_set_x_NSNN[index * batch_size:(index + 1) * batch_size],
                 y_NSNN: test_set_y_NSNN[index * batch_size:(index + 1) * batch_size],
-                x_WNN: train_set_x_WNN[index * batch_size:(index + 1) * batch_size]}) # MAY HAVE TO REMOVE THE LAST LINE
+                x_WNN: test_set_x_WNN[index * batch_size:(index + 1) * batch_size]})
 
     validate_model_NN = theano.function(inputs=[index],
             outputs=NN.errors(y_NSNN),
             givens={
                 x_NSNN: valid_set_x_NSNN[index * batch_size:(index + 1) * batch_size],
                 y_NSNN: valid_set_y_NSNN[index * batch_size:(index + 1) * batch_size],
-                x_WNN: train_set_x_WNN[index * batch_size:(index + 1) * batch_size]}) # MAY HAVE TO REMOVE THE LAST LINE
+                x_WNN: valid_set_x_WNN[index * batch_size:(index + 1) * batch_size]})
 
     # compiling a Theano function that reconstructs a sentence
     yrec_model_NN = theano.function(inputs=[index],
@@ -482,7 +493,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     log_file.write('    Nb of output units: '+str(nb_out_WNN)+'\n')
     log_file.write('NSNN:\n')
     log_file.write('    Nb of input units: '+str(nb_in_NSNN)+'\n')
-    log_file.write('    Nb of hidden units: '+str(nb_hidden_units_NSNN)+'\n')
+    log_file.write('    Nb of hidden units (1): '+str(nb_hidden_units_NSNN[0])+'\n')
+    log_file.write('    Nb of hidden units (2): '+str(nb_hidden_units_NSNN[1])+'\n')
     log_file.write('    Nb of output units: '+str(nb_out_NSNN)+'\n')
     
     # Hyperparameter values
@@ -517,7 +529,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     
     y_pred = numpy.zeros(n_sentence_samples)
     
-    std_factor = [0.1, 1, 2, 5, 10] #[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+    std_factor = [0.1, 1, 2, 5,] #[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
 
     epoch = 0
     done_looping = False
@@ -708,33 +720,32 @@ if __name__ == '__main__':
     # Folder to save the results of the training
     savePath = '/home/hubert/Dropbox/SpeechSynthesis_Project/Results/'
     
-    n_hidden_NSNN =[200]
+    n_hidden_NSNN =[200,150] # for hid_NSNN in n_hidden_NSNN:
     n_hidden_WNN = [250]
     learning_rates = [0.0025]
     L2_reg = [0.0]
     
     counter = 1
     for L2 in L2_reg:
-        for hid_NSNN in n_hidden_NSNN:    
-            for hid_WNN in n_hidden_WNN:
-                for lamb in learning_rates:       
-                    
-                    print('Configuration '+str(counter))
-                    print('*****************')
-                    print('')
-                    counter += 1
-    
-                    test_mlp(learning_rate=[lamb,lamb], 
-                             L2_reg=[L2,L2],#[0.0001,0.0001], 
-                             batch_size=1, # SHOULD STAY AT 1 ! 
-                             n_epochs=50, 
-                             n_hidden=[hid_WNN,hid_NSNN], 
-                             dataPath=path,
-                             savePath=savePath,
-                             fileNameData = fileNameData,
-                             n_out=[2421,1])
-                    
-                    pylab.close('all')
+        for hid_WNN in n_hidden_WNN:
+            for lamb in learning_rates:       
+                
+                print('Configuration '+str(counter))
+                print('*****************')
+                print('')
+                counter += 1
+
+                test_mlp(learning_rate=[lamb,lamb], 
+                         L2_reg=[L2,L2],#[0.0001,0.0001], 
+                         batch_size=1, # SHOULD STAY AT 1 ! 
+                         n_epochs=50, 
+                         n_hidden=[hid_WNN,n_hidden_NSNN], 
+                         dataPath=path,
+                         savePath=savePath,
+                         fileNameData = fileNameData,
+                         n_out=[2421,1])
+                
+                pylab.close('all')
 
     
     
