@@ -163,9 +163,9 @@ class OutputLinear(object):
         return T.mean((self.y_pred - y)**2)
 
 # To learn the standard deviation (SD) as well as the mean of the output.
-class OutputLinearWithStandardError(OutputLinear):
+class OutputLinearWithStandardDeviation(OutputLinear):
     def __init__(self, layerInput, n_in, n_out, W=None, b=None, W_SD=None, b_SD=None):
-        OutputLinear.__init__(layerInput, n_in, n_out, W, b)
+        OutputLinear.__init__(self, layerInput, n_in, n_out, W, b)
         
         if W_SD is None:
             # initialize with 0 the weights W as a matrix of shape (n_in, n_out)
@@ -174,7 +174,7 @@ class OutputLinearWithStandardError(OutputLinear):
                                    name='W_SD', borrow=True)
         if b_SD is None:
             # initialize the baises b as a vector of n_out 0s                           
-            b_SD = theano.shared(value=numpy.zeros((n_out,),
+            b_SD = theano.shared(value=numpy.ones((n_out,),
                                    dtype=theano.config.floatX),
                                    name='b_SD', borrow=True)
                                    
@@ -182,14 +182,14 @@ class OutputLinearWithStandardError(OutputLinear):
         self.b_SD = b_SD
 
         # compute vector of real values in symbolic form
-        self.SE_pred = T.nnet.softplus( T.dot(layerInput, self.W_SD) + self.b_SD)
+        self.SD_pred = T.nnet.softplus( T.dot(layerInput, self.W_SD) + self.b_SD)
 
         # add to parameters of the model
         self.params.extend([self.W_SD, self.b_SD])
         
     # Maximum likelyhood cost that takes into account the standard deviation.
     def errors(self, y):
-    	return T.mean( ((self.y_pred - y)**2 / self.SE_pred**2) + T.log(self.SE_pred) )
+    	return T.mean( ((self.y_pred - y)**2 / self.SD_pred**2) + T.log(self.SD_pred) )
 
 
 class MLP(object):
@@ -228,7 +228,7 @@ class MLP(object):
         
         """
         
-        nb_biases_NSNN = sum(n_hidden_NSNN) + n_out_NSNN
+        nb_biases_NSNN = sum(n_hidden_NSNN) + n_out_NSNN*2 # x2 for standard deviations
                                   
         self.hiddenLayerWNN = HiddenLayer(rng=rng, layerInput=layerInput_WNN,
                                        n_in=n_in_WNN, n_out=n_hidden_WNN,
@@ -250,9 +250,10 @@ class MLP(object):
                                        b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN[0]:n_hidden_NSNN[0]+n_hidden_NSNN[1]],
                                        activation=T.tanh)
         # Output layer of NSNN   
-        self.outputLayerNSNN = OutputLinearWithStandardError(layerInput=self.hiddenLayer2NSNN.output,
+        self.outputLayerNSNN = OutputLinearWithStandardDeviation(layerInput=self.hiddenLayer2NSNN.output,
                                         n_in=n_hidden_NSNN[1],
-                                        b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN[0]+n_hidden_NSNN[1]:],
+                                        b=self.outputLayerWNN.y_pred[0,-2],
+                                        b_SD=self.outputLayerWNN.y_pred[0,-1],
                                         n_out=n_out_NSNN)
 
         # L1 norm ; one regularization option is to enforce L1 norm to
@@ -314,7 +315,7 @@ class MLP(object):
         print self.params[1].get_value()
         print 'Wout_NSNN: ' + str(self.params[2].get_value().shape)
         print self.params[2].get_value()
-        print 'WoutSE_NSNN: ' + str(self.params[3].get_value().shape)
+        print 'WoutSD_NSNN: ' + str(self.params[3].get_value().shape)
         print self.params[3].get_value()
         print 'W1_WNN: ' + str(self.params[4].get_value().shape)
         print self.params[4].get_value()
@@ -567,6 +568,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
 
     epoch = 0
     done_looping = False
+#    has_diverged = False
 
     log_file.write('\nTraining\n')
     
@@ -585,6 +587,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
                     print('Training diverged at epoch '+str(epoch))
                     log_file.write('\n\nTraining diverged at epoch '+str(epoch)+', before iteration '+str(i)+'. Aborting training. \n')
                     done_looping = True
+#                    has_diverged = True
                     break
                     # raise Exception("Training diverged")
         this_train_loss = numpy.mean(train_losses)
@@ -611,7 +614,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
 #            # raise Exception("Training diverged")
 
         # if we got the best validation score until now
-        if this_validation_loss < best_validation_loss:
+        if this_validation_loss < best_validation_loss:# or has_diverged:
             best_validation_loss = this_validation_loss
             best_epoch = epoch
         
