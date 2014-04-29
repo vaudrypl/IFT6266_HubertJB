@@ -162,6 +162,35 @@ class OutputLinear(object):
             
         return T.mean((self.y_pred - y)**2)
 
+# To learn the standard deviation (SD) as well as the mean of the output.
+class OutputLinearWithStandardError(OutputLinear):
+    def __init__(self, layerInput, n_in, n_out, W=None, b=None, W_SD=None, b_SD=None):
+        OutputLinear.__init__(layerInput, n_in, n_out, W, b)
+        
+        if W_SD is None:
+            # initialize with 0 the weights W as a matrix of shape (n_in, n_out)
+            W_SD = theano.shared(value=numpy.zeros((n_in, n_out),
+                                   dtype=theano.config.floatX),
+                                   name='W_SD', borrow=True)
+        if b_SD is None:
+            # initialize the baises b as a vector of n_out 0s                           
+            b_SD = theano.shared(value=numpy.zeros((n_out,),
+                                   dtype=theano.config.floatX),
+                                   name='b_SD', borrow=True)
+                                   
+        self.W_SD = W_SD
+        self.b_SD = b_SD
+
+        # compute vector of real values in symbolic form
+        self.SE_pred = T.nnet.softplus( T.dot(layerInput, self.W_SD) + self.b_SD)
+
+        # add to parameters of the model
+        self.params.extend([self.W_SD, self.b_SD])
+        
+    # Maximum likelyhood cost that takes into account the standard deviation.
+    def errors(self, y):
+    	return T.mean( ((self.y_pred - y)**2 / self.SE_pred**2) + T.log(self.SE_pred) )
+
 
 class MLP(object):
     """Multi-Layer Perceptron Class.
@@ -221,18 +250,18 @@ class MLP(object):
                                        b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN[0]:n_hidden_NSNN[0]+n_hidden_NSNN[1]],
                                        activation=T.tanh)
         # Output layer of NSNN   
-        self.outputLayerNSNN = OutputLinear(layerInput=self.hiddenLayer2NSNN.output,
+        self.outputLayerNSNN = OutputLinearWithStandardError(layerInput=self.hiddenLayer2NSNN.output,
                                         n_in=n_hidden_NSNN[1],
                                         b=self.outputLayerWNN.y_pred[0,n_hidden_NSNN[0]+n_hidden_NSNN[1]:],
                                         n_out=n_out_NSNN)
 
         # L1 norm ; one regularization option is to enforce L1 norm to
         # be small
-        self.L1 = abs(self.hiddenLayer1NSNN.W).sum() + abs(self.hiddenLayer2NSNN.W).sum() + abs(self.outputLayerNSNN.W).sum()
+        self.L1 = abs(self.hiddenLayer1NSNN.W).sum() + abs(self.hiddenLayer2NSNN.W).sum() + abs(self.outputLayerNSNN.W).sum() + abs(self.outputLayerNSNN.W_SD).sum()
 
         # square of L2 norm ; one regularization option is to enforce
         # square of L2 norm to be small
-        self.L2_sqr = (self.hiddenLayer1NSNN.W ** 2).sum() + (self.hiddenLayer2NSNN.W ** 2).sum() + (self.outputLayerNSNN.W ** 2).sum()
+        self.L2_sqr = (self.hiddenLayer1NSNN.W ** 2).sum() + (self.hiddenLayer2NSNN.W ** 2).sum() + (self.outputLayerNSNN.W ** 2).sum() + (self.outputLayerNSNN.W_SD ** 2).sum()
 
         # computing the mean square errors
         self.errors = self.outputLayerNSNN.errors
@@ -240,7 +269,7 @@ class MLP(object):
         # the parameters of the model are the parameters of the two layer it is
         # made out of
         # self.params = self.hiddenLayerNSNN.params + self.outputLayerNSNN.params + self.hiddenLayerWNN.params + self.outputLayerWNN.params
-        self.params = [self.hiddenLayer1NSNN.W] + [self.hiddenLayer2NSNN.W] + [self.outputLayerNSNN.W] + self.hiddenLayerWNN.params + self.outputLayerWNN.params
+        self.params = [self.hiddenLayer1NSNN.W] + [self.hiddenLayer2NSNN.W] + [self.outputLayerNSNN.W, self.outputLayerNSNN.W_SD] + self.hiddenLayerWNN.params + self.outputLayerWNN.params
 
     def saveParams(self, dataPath, MLPtype):
         """ Pickle the W1, b1, W2 and b2 parameters of the trained network
@@ -283,14 +312,18 @@ class MLP(object):
         print self.params[0].get_value()
         print 'W2_NSNN: ' + str(self.params[1].get_value().shape)
         print self.params[1].get_value()
-        print 'W1_WNN: ' + str(self.params[2].get_value().shape)
+        print 'Wout_NSNN: ' + str(self.params[2].get_value().shape)
         print self.params[2].get_value()
-        print 'b1_WNN: ' + str(self.params[3].get_value().shape)
+        print 'WoutSE_NSNN: ' + str(self.params[3].get_value().shape)
         print self.params[3].get_value()
-        print 'W2_WNN: ' + str(self.params[4].get_value().shape)
+        print 'W1_WNN: ' + str(self.params[4].get_value().shape)
         print self.params[4].get_value()
-        print 'b2_WNN: ' + str(self.params[5].get_value().shape)
+        print 'b1_WNN: ' + str(self.params[5].get_value().shape)
         print self.params[5].get_value()
+        print 'W2_WNN: ' + str(self.params[6].get_value().shape)
+        print self.params[6].get_value()
+        print 'b2_WNN: ' + str(self.params[7].get_value().shape)
+        print self.params[7].get_value()
         
         #pylab.figure()
         #pylab.imshow(self.params[0].get_value())
@@ -436,7 +469,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
 
     # compiling a Theano function that generates the next sample
     ygen_model_NN = theano.function(inputs=[index,previous_samples],
-            outputs=NN.outputLayerNSNN.y_pred,
+            outputs=[NN.outputLayerNSNN.y_pred, NN.outputLayerNSNN.SD_pred],
             givens={
                 x_NSNN: previous_samples,
                 x_WNN: sentence_x_WNN[index:index+1]})
@@ -474,18 +507,18 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     # Create a folder and a log to record what's happening
     date_format = '%Y%m%d%H%M%S'
     string_now = datetime.datetime.now().strftime(date_format)
-    folderName = 'arch2uni_'+string_now+'/'
+    folderName = 'arch2uniSD_'+string_now+'/'
     if not os.path.exists(savePath+folderName):
         os.makedirs(savePath+folderName)
     savePath = savePath+folderName
-    log_name = 'arch2uni_log_file_'+string_now+'.txt'
+    log_name = 'arch2uniSD_log_file_'+string_now+'.txt'
     log_file = open(savePath+log_name, 'w')
     log_file.write(str(datetime.datetime.now())+'\n')
     
      
     
     # Write the hyperparameters of the model
-    log_file.write('Second architecture UNIFIED - NSNN & WNN\n')
+    log_file.write('Second architecture UNIFIED - NSNN & WNN - with predicted standard deviation\n')
     log_file.write('--------------------------------\n')
     log_file.write('WNN:\n')
     log_file.write('    Nb of input units: '+str(nb_in_WNN)+'\n')
@@ -530,7 +563,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     y_pred = numpy.zeros(n_sentence_samples)
     
     learning_rate = learning_rate[1]
-    std_factor = [0.1, 1.0, 2.0, 5.0,] #[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+#    std_factor = [0.1, 1.0, 2.0, 5.0,] #[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
 
     epoch = 0
     done_looping = False
@@ -590,25 +623,25 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
             # Generate the sentence
             if epoch%15 == 0:
                 print '\n... ... Generating'
-                for ind,k in enumerate(std_factor):
-                    y_gen = numpy.zeros(n_sentence_samples)
-                    presamples = numpy.zeros(240) #sentence_x_NSNN.get_value()[2500]
-                    for i in xrange(n_sentence_samples): #xrange(1000): #
-                        y_gen[i] = numpy.random.normal(ygen_model_NN(i,presamples.reshape((1, 240))),
-                                                       k*numpy.sqrt(min(train_err)/(560**2)))
-                        presamples = numpy.roll(presamples, -1)
-                        presamples[-1] = y_gen[i]
-                        
-                    output = numpy.int16(y_gen*560)
-                    wv.write(savePath+'Train_generated_data_Epoch'+str(epoch)+'_factor'+str(ind)+'.wav', 16000, output)
+  #              for ind,k in enumerate(std_factor):
+                y_gen = numpy.zeros(n_sentence_samples)
+                presamples = numpy.zeros(240) #sentence_x_NSNN.get_value()[2500]
+                for i in xrange(n_sentence_samples): #xrange(1000): #
+                    [mu, sigma] = ygen_model_NN(i, presamples.reshape((1, 240)))
+                    y_gen[i] = numpy.random.normal(mu, sigma)
+                    presamples = numpy.roll(presamples, -1)
+                    presamples[-1] = y_gen[i]
                     
-                    if k == 1.0:
-                        pylab.figure()
-                        pylab.plot(y_gen)
-                        pylab.xlabel('Samples')
-                        pylab.ylabel('Amplitude')
-                        pylab.savefig(savePath+'Train_generated_data_Epoch'+str(epoch)+'_factor'+str(ind)+'.png', format='png')
-            
+                output = numpy.int16(y_gen*560)
+                wv.write(savePath+'Train_generated_data_Epoch'+str(epoch)+'.wav', 16000, output)
+                
+                if k == 1.0:
+                    pylab.figure()
+                    pylab.plot(y_gen)
+                    pylab.xlabel('Samples')
+                    pylab.ylabel('Amplitude')
+                    pylab.savefig(savePath+'Train_generated_data_Epoch'+str(epoch)+'.png', format='png')
+        
 #        raw_input("PRESS ENTER TO CONTINUE.")
             
         # Check if the training has improved the validation error; if not, decrease the learning rate
@@ -683,24 +716,24 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     
         # Generate the sentence
         print '\n... ... Generating'
-        for ind,k in enumerate(std_factor):
-            y_gen = numpy.zeros(n_sentence_samples)
-            presamples = numpy.zeros(240) #sentence_x_NSNN.get_value()[2500]
-            for i in xrange(n_sentence_samples): #xrange(1000): #
-                y_gen[i] = numpy.random.normal(ygen_model_NN(i,presamples.reshape((1, 240))),
-                                               k*numpy.sqrt(min(train_err)/(560**2)))
-                presamples = numpy.roll(presamples, -1)
-                presamples[-1] = y_gen[i]
-                
-            output = numpy.int16(y_gen*560)
-            wv.write(savePath+'Best_generated_data_'+str(ind)+'.wav', 16000, output)
-        
-            pylab.figure()
-            pylab.plot(y_gen)
-            pylab.xlabel('Samples')
-            pylab.ylabel('Amplitude')
-            pylab.savefig(savePath+'generated_data_'+str(ind)+'.png', format='png')
-            log_file.write('Generation saved in '+savePath+'generated_data'+str(ind)+'.png \n')
+#        for ind,k in enumerate(std_factor):
+        y_gen = numpy.zeros(n_sentence_samples)
+        presamples = numpy.zeros(240) #sentence_x_NSNN.get_value()[2500]
+        for i in xrange(n_sentence_samples): #xrange(1000): #
+            [mu, sigma] = ygen_model_NN(i, presamples.reshape((1, 240)))
+            y_gen[i] = numpy.random.normal(mu, sigma)
+            presamples = numpy.roll(presamples, -1)
+            presamples[-1] = y_gen[i]
+            
+        output = numpy.int16(y_gen*560)
+        wv.write(savePath+'Best_generated_data_'+str(ind)+'.wav', 16000, output)
+    
+        pylab.figure()
+        pylab.plot(y_gen)
+        pylab.xlabel('Samples')
+        pylab.ylabel('Amplitude')
+        pylab.savefig(savePath+'generated_data.png', format='png')
+        log_file.write('Generation saved in '+savePath+'generated_data'+'.png \n')
         
     except:
         print('No parameters were saved.')
@@ -721,11 +754,11 @@ if __name__ == '__main__':
     #theano.config.compute_test_value = 'warn'
     #theano.config.mode= 'DebugMode'
     
-    path = '/home/hubert/Documents/IFT6266/TIMIT/TRAIN/DR1/FCJF0/Extracted_Features/'
+    path = '/u/vaudrypl/IFT6266/TIMIT/TRAIN/DR1/FCJF0/Extracted_Features/'
     fileNameData = 'win240_ARCH2_FCJF0.npz'
     
     # Folder to save the results of the training
-    savePath = '/home/hubert/Dropbox/SpeechSynthesis_Project/Results/'
+    savePath = '/u/vaudrypl/Dropbox/SpeechSynthesis_Project/Results/'
     
     n_hidden_NSNN =[200,150] # for hid_NSNN in n_hidden_NSNN:
     n_hidden_WNN = [250]
