@@ -15,6 +15,7 @@ import math
 
 import theano
 import theano.tensor as T
+from theano import pp
 
 import scipy.io.wavfile as wv
     
@@ -189,7 +190,8 @@ class OutputLinearWithStandardDeviation(OutputLinear):
         
     # Maximum likelyhood cost that takes into account the standard deviation.
     def errors(self, y):
-    	return T.mean( ((self.y_pred - y)**2 / self.SD_pred**2) + T.log(self.SD_pred) )
+#        print "y_pred : " + str(T.mean(self.y_pred).eval()) + "\tSD_pred : " + str(T.mean(self.SD_pred).eval())
+    	return T.mean( ((self.y_pred - y)**2 / 2*(self.SD_pred**2)) + T.log(self.SD_pred) )
 
 
 class MLP(object):
@@ -491,7 +493,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
     # compiling a Theano function `train_model` that returns the cost, but
     # in the same time updates the parameter of the model based on the rules
     # defined in `updates`
-    train_model_NN = theano.function(inputs=[index, eta], outputs=cost_NN,
+    train_model_NN = theano.function(inputs=[index, eta], outputs=[cost_NN, NN.outputLayerNSNN.SD_pred],
             updates=updates_NN,
             givens={
                 x_NSNN: train_set_x_NSNN[index * batch_size:(index + 1) * batch_size],
@@ -557,6 +559,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
 
     train_err = []
     train_losses = numpy.zeros(n_train_batches)
+    train_SD = numpy.zeros(n_train_batches)
     validation_losses = numpy.zeros(n_valid_batches)
     test_losses = numpy.zeros(n_test_batches)
     valid_err = []
@@ -578,7 +581,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
         
         # Training set
         for i in xrange(n_train_batches): # xrange(10000): # 
-            train_losses[i] = (560**2)*train_model_NN(i,learning_rate)
+#            train_losses[i] = (560**2)*train_model_NN(i,learning_rate)
+            [train_losses[i], train_SD[i]] = train_model_NN(i,learning_rate)
             #NN.showWeights()
             #raw_input("PRESS ENTER TO CONTINUE.")
             if i%10000 == 0:
@@ -586,11 +590,14 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
                 if math.isnan(train_losses[i]):
                     print('Training diverged at epoch '+str(epoch))
                     log_file.write('\n\nTraining diverged at epoch '+str(epoch)+', before iteration '+str(i)+'. Aborting training. \n')
+                    print('train pred_SD : ' + str(train_SD[i]))
+                    log_file.write('train pred_SD : ' + str(train_SD[i]))
                     done_looping = True
 #                    has_diverged = True
                     break
                     # raise Exception("Training diverged")
         this_train_loss = numpy.mean(train_losses)
+        this_train_SD = numpy.mean(train_SD)
         train_err.append(this_train_loss)
     
         # Validation set
@@ -598,7 +605,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
             for i in xrange(n_valid_batches): #xrange(100): # 
                 if i%10000 == 0:
                     print('    Validation iteration '+str(i)+'/'+str(n_valid_batches))
-                validation_losses[i] = (560**2)*validate_model_NN(i)
+#                validation_losses[i] = (560**2)*validate_model_NN(i)
+                validation_losses[i] = validate_model_NN(i)
             this_validation_loss = numpy.mean(validation_losses)        
             valid_err.append(this_validation_loss)
             
@@ -606,6 +614,8 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
                  (epoch, this_train_loss, this_validation_loss))
             log_file.write('Epoch %i, train error %f, validation error %f' %
                  (epoch, this_train_loss, this_validation_loss))
+            print('train pred_SD : ' + str(this_train_SD))
+            log_file.write('train pred_SD : ' + str(this_train_SD))
             log_file.write('\n')
 #        else:
 #            print('Training diverged at epoch '+str(epoch))
@@ -739,6 +749,7 @@ def test_mlp(learning_rate=[0.15,0.15], L1_reg=[0.0,0.0], L2_reg=[0.000001,0.000
         log_file.write('Generation saved in '+savePath+'generated_data'+'.png \n')
         
     except:
+        print "Unexpected error:", sys.exc_info()[0]
         print('No parameters were saved.')
         log_file.write('\nNo parameters were saved. \n')
 
